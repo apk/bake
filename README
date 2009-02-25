@@ -1,0 +1,25 @@
+bake is following the tradition of image (of X11 fame), but instead
+of using a rather unsuitable preprocessor bake brings its own macro
+system, and also implements the basic dependency machine itself.
+
+Or rather, 'will be'.
+
+Simple example:
+
+  Program test
+    CSource a
+    CSourec b
+
+is expecting source a.c and b.c and links them to a program called
+test. And 'bake clean' will delete all generatable files, as the
+macros 'Program' and 'CSource' not only generate the compiling
+targets and dependencies but also entries for clean. (And you
+may get fancy with that.)
+
+  Using mylib
+    Program pmy
+      ...
+
+will make a program pmy which uses the library mylib. Whence that
+comes and what it actually contains is up to some configuration
+(which I didn't figure out yet).
