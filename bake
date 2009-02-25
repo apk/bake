@@ -1,0 +1,386 @@
+#!/usr/bin/env ruby
+
+$errcnt = 0
+
+class Target
+
+  @@map={}
+
+  attr_reader :name
+
+  def Target.find n
+    @@map[n]
+  end
+
+  def Target.make n
+    @@map[n] || Target.new(n)
+  end
+
+  def initialize n
+    @@map[n]=self
+    @name=n
+    @acts=[]
+    @deps=[]
+  end
+
+  def dep n
+    if n.instance_of? Target
+      @deps <<= n
+    else
+      @deps <<= Target.make n
+    end
+  end
+
+  def say n
+    act([:echo, n])
+  end
+
+  def act n
+    @acts <<= n
+  end
+
+  def Target.dump_all
+    @@map.each_value { |n| n.dump }
+  end
+
+  def dump
+    puts "Target #{@name.inspect}"
+    @deps.each do |d|
+      puts "   Dep #{d.name.inspect}"
+    end
+    @acts.each do |a|
+      puts "   #{a.inspect}"
+    end
+  end
+
+  def build
+    if not @built
+      puts "Build " + @name.inspect
+      ts = nil
+
+      @deps.each do |t|
+        # XXX How do we handle things that don't exist,
+        # and how do we decide whether we can build it
+        # (and can assume it exists when we ran the
+        # commands) or whether it is only a source.
+        pts = t.build
+        return nil if not pts # Failure of some kind (XXX impl -k here)
+        ts = pts if (not ts) || (pts > ts)
+      end
+
+      exe=true
+      if @name.instance_of? String
+        begin
+          @timestamp = File.mtime(@name)
+          exe=false if ts && @timestamp > ts
+        rescue Errno::ENOENT
+          # We just build anew (XXX we may take the timestamp
+          # after building and see whether it was touched or
+          # came into existence at all. If it is not touched
+          # we could either optimize the build by not rebuilding
+          # dependencies, or we could complain.
+          @timestamp = Time.now
+        end
+      else
+        @timestamp = Time.now
+      end
+
+      if exe
+        @acts.each do |a|
+          cmd=a[0]
+          case cmd
+          when String
+            puts "Run: #{a.inspect}"
+            if a.length > 1
+              if system *a
+                #
+              else
+                # This build failed
+                return nil
+              end
+            else
+              error "No arguments on command -- exec would behave strangely"
+            end
+          when :echo
+            puts "      - " + a[1..-1].to_s
+          when :mkdirrm
+            puts "mkdir/rm: #{a.inspect}"
+            a[1..-1].each do |n|
+              makedirsof(n)
+              begin
+                File.unlink(n)
+              rescue Errno::ENOENT
+                # Ok, the file wasn't there to begin with
+              end
+            end
+          else
+            puts "Bad action " + a.inspect
+            error "Bad command in action"
+          end
+        end
+        # XXX Hacked; we need to think about the proper timestamp
+        # of targets that are actually just dependencies
+        @timestamp = Time.now if not @acts.empty?
+      end
+
+      @built=@timestamp
+    end
+    puts "Built " + @name.inspect
+    # Need to return build timestamp
+    @built
+  end
+
+end
+
+def makedirsof n
+  n = String.new(n)
+  if n.gsub!(/\/+[^\/]*$/, "")
+    if File.directory?(n)
+    else
+      makedirsof n
+      # If this fails we deserve it...
+      Dir.mkdir(n)
+    end
+  end
+end
+
+class Node
+  # attr_reader :bt, :et, :day, :mon, :proj, :txt, :cnt
+
+  attr_reader :indent, :line, :parent, :source
+
+  def initialize (i, l, p, sa)
+    @indent=i
+    @line=l
+    @parent=p
+    @source=sa
+    @subs = []
+    @map={}
+  end
+
+  def setvar n, v
+    @map [n] = v;
+    puts "\t\t- Set #{n.inspect}=#{v.inspect} on #{source}"
+  end
+
+  def getvar n, d
+    r = @map [n]
+    if not r
+      if @parent
+        r = @parent.getvar n, d
+      end
+      r = d unless r
+    end
+    r
+  end
+
+  def add(l)
+    @subs <<= l
+  end
+
+  def show pref
+    puts "#{pref}#{@line}"
+    pref += "  "
+    @subs.each do |x|
+      x.show pref
+    end
+  end
+
+  def eval
+    a=@line.split
+    if a.length == 0
+      error "Bad line"
+    else
+      s="cmd_#{a[0].gsub(/[A-Z]/) {|x| "_#{x.downcase}" }}".to_sym
+      if respond_to? s
+      then
+        send s, a[1..-1]
+      else
+        error "Bad cmd #{s} with #{a.inspect}"
+      end
+    end
+  end
+
+  def error s
+    puts "#{source}: #{s} (#{@line})"
+    $errcnt += 1
+  end
+  
+  def evalsubs
+    @subs.each { |x| x.eval }
+  end
+
+  def cmd__group a
+    puts "Group called: #{a.inspect}"
+    evalsubs
+  end
+
+  def cmd__library a
+    puts "Library called: #{a.inspect}"
+    if a.length != 1
+      error "Need one arg"
+    else
+      name = a[0]
+      coll = []
+      setvar :objcoll, coll
+      setvar "srcdir", ""
+      evalsubs
+
+      ofn = "zz/lib/" + name + ".a"
+      t = Target.make(ofn)
+      a = ["ar", "rs", ofn]
+      coll.each do |x|
+        t.dep x
+        a <<= x.name
+      end
+      t.say "Link #{ofn} (#{a.length} files)"
+      t.act([:mkdirrm, ofn])
+      t.act a
+
+      Target.make(:lib).dep t
+      
+    end
+  end
+
+  def cmd__with_src_dir a
+    puts "WithSrcDir called: #{a.inspect}"
+    if a.length != 1
+      error "Need one arg"
+    else
+      setvar "srcdir", getvar("srcdir","") + a[0] + "/"
+      evalsubs
+    end
+  end
+
+  def cmd__with_inc_dir a
+    puts "WithIncDir called: #{a.inspect}"
+    if a.length != 1
+      error "Need one arg"
+    else
+      i = getvar :incdirs, nil
+      i ||= []
+      i = i.clone << (getvar("srcdir","") + a[0])
+      setvar :incdirs, i
+      evalsubs
+    end
+  end
+
+  def cmd__inc_dir a
+    puts "IncDir called: #{a.inspect}"
+    if a.length != 1
+      error "Need one arg"
+    else
+      i = @parent.getvar :incdirs, nil
+      i ||= []
+      i = i << (@parent.getvar("srcdir","") + a[0])
+      @parent.setvar :incdirs, i
+      evalsubs
+    end
+    if not @subs.empty?
+      error "IncDir can't have subnodes"
+    end
+  end
+
+  # def CSource *names
+  #   foreach n names
+  #     let b $srcdir+n
+  #     let ofn obj(b)
+  #     let sfn b+".c"
+  #     target ofn
+  #       dep sfn
+  #       cmd :mkdirrm $ofn
+  #       cmd cc -c -o $ofn $@(map \x->("-I"+x) incdirs) $sfn
+  #     let coll :objcoll
+  #     if coll
+  #       append coll ofn
+
+  def compcommon n, suf, cc
+    b = getvar("srcdir", "") + n
+    sfn = b + suf
+    ofn = "zz/obj/" + b + ".o"
+
+    t = Target.make(ofn)
+    t.dep(sfn)
+    t.say("Compile #{sfn}")
+    t.act([:mkdirrm,ofn])
+    cm=["gcc","-c","-o",ofn]
+    i = getvar :incdirs, nil
+    if i
+      i.each { |x| cm <<= "-I#{x}" }
+    end
+    cm <<= sfn
+    t.act cm
+               
+    Target.make(:obj).dep t
+
+    oc = getvar :objcoll, nil
+    if oc
+      oc <<= t
+    end
+  end
+
+  def cmd__c_source a
+    puts "SrcDir called: #{a.inspect}"
+    a.each do |n|
+      if n =~ /[a-z][a-z0-9\/]*/
+        compcommon n, ".c", "gcc"
+      else
+        error "Bad filename '#{n}'"
+      end
+    end
+  end
+
+  def cmd__cpp_source a
+    puts "SrcDir called: #{a.inspect}"
+    a.each do |n|
+      if n =~ /[a-z][a-z0-9\/]*/
+        compcommon n, ".cpp", "g++"
+      else
+        error "Bad filename '#{n}'"
+      end
+    end
+  end
+
+end
+
+top=Node.new(-1, "Group", nil, "init:0")
+curr=top
+
+file="Bakefile"
+lno=0
+File.open(file).entries.each do |l|
+  lno += 1
+  l.chomp!
+  next if l =~ /^ *;/
+  next if l =~ /^ *#/
+  next if l =~ /^ *$/
+  if l =~ /\t/
+    puts "Tab in bakefile: #{l.inspect}"
+    exit 1
+  end
+  l =~ /^( *)/
+  i = $1.length
+  # puts "#{i}: #{l.inspect}"
+  while curr.indent >= i
+    curr = curr.parent
+  end
+  n = Node.new(i, l, curr, "#{file}:#{lno}")
+  curr.add n
+  curr = n
+end
+
+# top.show "* "
+
+top.eval
+
+# Target.dump_all
+
+t = Target.find :lib
+if t
+  t.build
+end
+
+# Local variables:
+# mode: ruby
+# compile-command: "ruby bake"
+# End:
