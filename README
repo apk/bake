@@ -1,4 +1,4 @@
-bake is following the tradition of image (of X11 fame), but instead
+bake is following the tradition of imake (of X11 fame), but instead
 of using a rather unsuitable preprocessor bake brings its own macro
 system, and also implements the basic dependency machine itself.
 
