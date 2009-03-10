@@ -3,12 +3,30 @@
 $errcnt = 0
 
 class Def
+
   attr_reader :name, :args, :body
 
   def initialize n, a, b
     @name=n
     @args=a
     @body=b
+  end
+
+  def run_on node, acts, scope
+    # First create variable bindings
+    acts=acts.clone
+    binds={}
+    @args.each do |n|
+      if n =~ /^\*(.*)$/
+        # Should be last, but we checked at definition time
+        binds[n]=acts
+      else
+        a=acts.shift
+        error "Too few args" if not a
+        binds[n]=a
+      end
+    end
+    puts "BINDS: #{binds.inspect}"
   end
 
 end
@@ -155,12 +173,57 @@ def makedirsof n
   end
 end
 
+class Scope
+
+  attr_reader :parent
+
+  def initialize p
+    @parent=p
+    @map={}
+    @defs={}
+  end
+
+  def mksub
+    Scope.new self
+  end
+
+  def setvar n, v
+    @map [n] = v;
+    puts "\t\t- Set #{n.inspect}=#{v.inspect}" # XXX on #{source}"
+  end
+
+  def getvar n, d
+    r = @map [n]
+    if not r
+      if @parent
+        r = @parent.getvar n, d
+      end
+      r = d unless r
+    end
+    r
+  end
+
+  def get_def n
+    # puts "Lkup def #{n.inspect} on #{@line}:#{self} (#{@defs[n]})"
+    @defs[n] || (parent ? parent.get_def(n) : nil)
+  end
+
+  def add_def d
+    # puts "Set def #{d.name} on #{@line}"
+    if @defs[d.name]
+      error "Overriding #{d.name}"
+    end
+    @defs[d.name]=d
+  end
+  
+end
+
 class Node
   # attr_reader :bt, :et, :day, :mon, :proj, :txt, :cnt
 
   attr_reader :indent, :line, :parent, :source
 
-  def initialize (i, l, p, sa)
+  def initialize i, l, p, sa
     @indent=i
     @line=l
     @parent=p
@@ -198,7 +261,7 @@ class Node
     end
   end
 
-  def eval
+  def eval scope
     a=@line.split
     if a.length == 0
       error "Bad line"
@@ -206,9 +269,14 @@ class Node
       s="cmd_#{a[0].gsub(/[A-Z]/) {|x| "_#{x.downcase}" }}".to_sym
       if respond_to? s
       then
-        send s, a[1..-1]
+        send s, a[1..-1], scope
       else
-        error "Bad cmd #{s} with #{a.inspect}"
+        d = scope.get_def a[0]
+        if d
+          d.run_on self, a[1..-1], scope
+        else
+          error "Bad cmd #{a[0]} with #{a.inspect}"
+        end
       end
     end
   end
@@ -218,8 +286,8 @@ class Node
     $errcnt += 1
   end
   
-  def evalsubs
-    @subs.each { |x| x.eval }
+  def evalsubs scope
+    @subs.each { |x| x.eval scope }
   end
 
   def showsubs
@@ -233,14 +301,7 @@ class Node
     x =~ /^[A-Za-z][A-Za-z0-9]*$/
   end
 
-  def add_def d
-    if @defs[d.name]
-      error "Overriding #{d.name}"
-    end
-    @defs[d.name]=d
-  end
-  
-  def cmd_def a
+  def cmd_def a, scope
     puts "Def called: #{a.inspect}"
     name=a[0]
     if !is_valid_name(name)
@@ -264,25 +325,26 @@ class Node
     end
     puts "Args ok"
     d=Def.new name, a[1..-1], @subs
-    @parent.add_def d
+    scope.add_def d
     showsubs
   end
 
-  def cmd__group a
+  def cmd__group a, scope
     puts "Group called: #{a.inspect}"
-    evalsubs
+    evalsubs scope.mksub
   end
 
-  def cmd__library a
+  def cmd__library a, scope
     puts "Library called: #{a.inspect}"
     if a.length != 1
       error "Need one arg"
     else
+      sc=scope.mksub
       name = a[0]
       coll = []
-      setvar :objcoll, coll
-      setvar "srcdir", ""
-      evalsubs
+      sc.setvar :objcoll, coll
+      sc.setvar "srcdir", ""
+      evalsubs sc
 
       ofn = "zz/lib/" + name + ".a"
       t = Target.make(ofn)
@@ -300,47 +362,48 @@ class Node
     end
   end
 
-  def cmd__with_src_dir a
+  def cmd__with_src_dir a, scope
     puts "WithSrcDir called: #{a.inspect}"
     if a.length != 1
       error "Need one arg"
     else
-      setvar "srcdir", getvar("srcdir","") + a[0] + "/"
-      evalsubs
+      sc=scope.mksub
+      sc.setvar "srcdir", sc.getvar("srcdir","") + a[0] + "/"
+      evalsubs sc
     end
   end
 
-  def cmd__with_inc_dir a
+  def cmd__with_inc_dir a, scope
     puts "WithIncDir called: #{a.inspect}"
     if a.length != 1
       error "Need one arg"
     else
-      i = getvar :incdirs, nil
+      sc=scope.mksub
+      i = sc.getvar :incdirs, nil
       i ||= []
-      i = i.clone << (getvar("srcdir","") + a[0])
-      setvar :incdirs, i
-      evalsubs
+      i = i.clone << (sc.getvar("srcdir","") + a[0])
+      sc.setvar :incdirs, i
+      evalsubs sc
     end
   end
 
-  def cmd__inc_dir a
+  def cmd__inc_dir a, scope
     puts "IncDir called: #{a.inspect}"
     if a.length != 1
       error "Need one arg"
     else
-      i = @parent.getvar :incdirs, nil
+      i = scope.getvar :incdirs, nil
       i ||= []
-      i = i << (@parent.getvar("srcdir","") + a[0])
-      @parent.setvar :incdirs, i
-      evalsubs
+      i = i << (scope.getvar("srcdir","") + a[0])
+      scope.setvar :incdirs, i
     end
     if not @subs.empty?
       error "IncDir can't have subnodes"
     end
   end
 
-  def compcommon n, suf, cc
-    b = getvar("srcdir", "") + n
+  def compcommon n, suf, cc, scope
+    b = scope.getvar("srcdir", "") + n
     sfn = b + suf
     ofn = "zz/obj/" + b + ".o"
 
@@ -349,7 +412,7 @@ class Node
     t.say("Compile #{sfn}")
     t.act([:mkdirrm,ofn])
     cm=["gcc","-c","-o",ofn]
-    i = getvar :incdirs, nil
+    i = scope.getvar :incdirs, nil
     if i
       i.each { |x| cm <<= "-I#{x}" }
     end
@@ -358,28 +421,28 @@ class Node
                
     Target.make(:obj).dep t
 
-    oc = getvar :objcoll, nil
+    oc = scope.getvar :objcoll, nil
     if oc
       oc <<= t
     end
   end
 
-  def cmd__c_source a
+  def cmd__c_source a, scope
     puts "SrcDir called: #{a.inspect}"
     a.each do |n|
       if n =~ /[a-z][a-z0-9\/]*/
-        compcommon n, ".c", "gcc"
+        compcommon n, ".c", "gcc", scope
       else
         error "Bad filename '#{n}'"
       end
     end
   end
 
-  def cmd__cpp_source a
+  def cmd__cpp_source a, scope
     puts "SrcDir called: #{a.inspect}"
     a.each do |n|
       if n =~ /[a-z][a-z0-9\/]*/
-        compcommon n, ".cpp", "g++"
+        compcommon n, ".cpp", "g++", scope
       else
         error "Bad filename '#{n}'"
       end
@@ -414,11 +477,11 @@ File.open(file).entries.each do |l|
   curr = n
 end
 
-# top.show "* "
+top.show "* "
 
-top.eval
+top.eval Scope.new(nil)
 
-# Target.dump_all
+Target.dump_all
 
 t = Target.find :lib
 if t
