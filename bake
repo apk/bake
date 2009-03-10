@@ -2,6 +2,17 @@
 
 $errcnt = 0
 
+class Def
+  attr_reader :name, :args, :body
+
+  def initialize n, a, b
+    @name=n
+    @args=a
+    @body=b
+  end
+
+end
+
 class Target
 
   @@map={}
@@ -156,6 +167,7 @@ class Node
     @source=sa
     @subs = []
     @map={}
+    @defs={}
   end
 
   def setvar n, v
@@ -174,7 +186,7 @@ class Node
     r
   end
 
-  def add(l)
+  def add l
     @subs <<= l
   end
 
@@ -208,6 +220,52 @@ class Node
   
   def evalsubs
     @subs.each { |x| x.eval }
+  end
+
+  def showsubs
+    @subs.each do |x|
+      puts "    Sub: #{x.line}"
+      x.showsubs
+    end
+  end
+
+  def is_valid_name x
+    x =~ /^[A-Za-z][A-Za-z0-9]*$/
+  end
+
+  def add_def d
+    if @defs[d.name]
+      error "Overriding #{d.name}"
+    end
+    @defs[d.name]=d
+  end
+  
+  def cmd_def a
+    puts "Def called: #{a.inspect}"
+    name=a[0]
+    if !is_valid_name(name)
+      error "No or bad def name '#{name}'"
+      return
+    end
+    if a.size > 1
+      last=a[-1]
+      if !is_valid_name(last)
+        if last[0..0]!= "*" || !is_valid_name(last[1..-1])
+          error "Bad last arg name in def"
+          return
+        end
+      end
+      a[1..-2].each do |x|
+        if !is_valid_name(x)
+          error "Bad nonlast arg name in def"
+          return
+        end
+      end
+    end
+    puts "Args ok"
+    d=Def.new name, a[1..-1], @subs
+    @parent.add_def d
+    showsubs
   end
 
   def cmd__group a
@@ -280,19 +338,6 @@ class Node
       error "IncDir can't have subnodes"
     end
   end
-
-  # def CSource *names
-  #   foreach n names
-  #     let b $srcdir+n
-  #     let ofn obj(b)
-  #     let sfn b+".c"
-  #     target ofn
-  #       dep sfn
-  #       cmd :mkdirrm $ofn
-  #       cmd cc -c -o $ofn $@(map \x->("-I"+x) incdirs) $sfn
-  #     let coll :objcoll
-  #     if coll
-  #       append coll ofn
 
   def compcommon n, suf, cc
     b = getvar("srcdir", "") + n
