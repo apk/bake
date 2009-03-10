@@ -1,0 +1,16 @@
+def MyCSource *names
+  foreach n names
+    let b $srcdir+n
+    let ofn obj(b)
+    let sfn b+".c"
+    target ofn
+      dep sfn
+      cmd :mkdirrm $ofn
+      cmd cc -c -o $ofn $@(map \x->("-I"+x) incdirs) $sfn
+    let coll :objcoll
+    if coll
+      append coll ofn
+
+WithSrcDir tsrc
+  Library ll
+    MyCSource aa bb
