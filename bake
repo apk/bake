@@ -2,6 +2,10 @@
 
 $errcnt = 0
 
+def is_valid_name x
+  x =~ /^[A-Za-z][A-Za-z0-9]*$/
+end
+
 class Def
 
   attr_reader :name, :args, :body
@@ -15,18 +19,22 @@ class Def
   def run_on node, acts, scope
     # First create variable bindings
     acts=acts.clone
-    binds={}
+    sc=scope.mksub
     @args.each do |n|
       if n =~ /^\*(.*)$/
         # Should be last, but we checked at definition time
-        binds[n]=acts
+        sc.setvar n,acts
       else
         a=acts.shift
         error "Too few args" if not a
-        binds[n]=a
+        sc.setvar n,a
       end
     end
-    puts "BINDS: #{binds.inspect}"
+    if not node.subs.empty?
+      node.error "Can't run definition on nonempty node"
+      return
+    end
+    @body.each { |x| x.eval sc }
   end
 
 end
@@ -222,6 +230,7 @@ class Node
   # attr_reader :bt, :et, :day, :mon, :proj, :txt, :cnt
 
   attr_reader :indent, :line, :parent, :source
+  attr_reader :subs
 
   def initialize i, l, p, sa
     @indent=i
@@ -262,6 +271,9 @@ class Node
   end
 
   def eval scope
+    # XXX This splitting does a bit too much; we may want
+    # to keep spaces in commands like 'let a "pre  post"'
+    # (depending on the command type?)
     a=@line.split
     if a.length == 0
       error "Bad line"
@@ -295,38 +307,6 @@ class Node
       puts "    Sub: #{x.line}"
       x.showsubs
     end
-  end
-
-  def is_valid_name x
-    x =~ /^[A-Za-z][A-Za-z0-9]*$/
-  end
-
-  def cmd_def a, scope
-    puts "Def called: #{a.inspect}"
-    name=a[0]
-    if !is_valid_name(name)
-      error "No or bad def name '#{name}'"
-      return
-    end
-    if a.size > 1
-      last=a[-1]
-      if !is_valid_name(last)
-        if last[0..0]!= "*" || !is_valid_name(last[1..-1])
-          error "Bad last arg name in def"
-          return
-        end
-      end
-      a[1..-2].each do |x|
-        if !is_valid_name(x)
-          error "Bad nonlast arg name in def"
-          return
-        end
-      end
-    end
-    puts "Args ok"
-    d=Def.new name, a[1..-1], @subs
-    scope.add_def d
-    showsubs
   end
 
   def cmd__group a, scope
@@ -451,6 +431,51 @@ class Node
 
 end
 
+class << Object
+
+  def run_on
+  end
+
+end
+
+basescope=Scope.new(nil)
+
+class BaseDef
+  attr_reader :name
+  def initialize n
+    @name = n
+  end
+end
+
+c=BaseDef.new "def"
+def c.run_on node, acts, scope
+  puts "Def called: #{acts.inspect}"
+  name=acts[0]
+  if !is_valid_name(name)
+    error "No or bad def name '#{name}'"
+    return
+  end
+  if acts.size > 1
+    last=acts[-1]
+    if !is_valid_name(last)
+      if last[0..0]!= "*" || !is_valid_name(last[1..-1])
+        error "Bad last arg name in def"
+        return
+      end
+    end
+    acts[1..-2].each do |x|
+      if !is_valid_name(x)
+        error "Bad nonlast arg name in def"
+        return
+      end
+    end
+  end
+  puts "Args ok"
+  d=Def.new name, acts[1..-1], node.subs
+  scope.add_def d
+end
+basescope.add_def c
+
 top=Node.new(-1, "Group", nil, "init:0")
 curr=top
 
@@ -479,7 +504,7 @@ end
 
 top.show "* "
 
-top.eval Scope.new(nil)
+top.eval basescope.mksub
 
 Target.dump_all
 
