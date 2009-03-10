@@ -309,11 +309,6 @@ class Node
     end
   end
 
-  def cmd__group a, scope
-    puts "Group called: #{a.inspect}"
-    evalsubs scope.mksub
-  end
-
   def cmd__library a, scope
     puts "Library called: #{a.inspect}"
     if a.length != 1
@@ -442,13 +437,18 @@ basescope=Scope.new(nil)
 
 class BaseDef
   attr_reader :name
-  def initialize n
+  def initialize n, b
     @name = n
+    b.add_def self
   end
 end
 
-c=BaseDef.new "def"
-def c.run_on node, acts, scope
+def (BaseDef.new "Group", basescope).run_on node, acts, scope
+  puts "Group called: #{acts.inspect}"
+  node.evalsubs scope.mksub
+end
+
+def (BaseDef.new "def", basescope).run_on node, acts, scope
   puts "Def called: #{acts.inspect}"
   name=acts[0]
   if !is_valid_name(name)
@@ -474,7 +474,6 @@ def c.run_on node, acts, scope
   d=Def.new name, acts[1..-1], node.subs
   scope.add_def d
 end
-basescope.add_def c
 
 top=Node.new(-1, "Group", nil, "init:0")
 curr=top
